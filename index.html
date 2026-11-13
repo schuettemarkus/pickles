@@ -163,6 +163,7 @@ button.team:active:not(:disabled){transform:scale(.97)}
 .crew:first-child{border-top:0}
 .crew .text{padding:9px 11px;font-size:15px}
 .crew .nmline{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:3px}
+.crew .bio{display:block;font-weight:400;font-style:italic}
 .empty{text-align:center;padding:34px 18px}
 .empty h2{font-size:22px;margin-bottom:6px}
 .banner{padding:10px 14px;border-radius:12px;background:var(--loss-bg);color:var(--loss);font-size:13px;font-weight:600}
@@ -202,14 +203,15 @@ button.team:active:not(:disabled){transform:scale(.97)}
 "use strict";
 /* ---------- constants ---------- */
 const PLAYERS = [
-  ["tyler","Tyler","T-Bag Tyler"],
-  ["reid","Reid","Greasy Reid"],
-  ["lowell","Lowell","Low-Hangin' Lowell"],
-  ["robert","Robert","Bobby Two-Pumps"],
-  ["markus","Markus","Skidmarkus"],
-  ["curt","Curt","Curt the Moist Paddle"],
-  ["sam","Sam","Swamp Ass Sam"],
-  ["jake","Jake","Jock Itch Jake"],
+  // [id, name, default nickname, bio, personal nickname pool for the dice]
+  ["tyler","Tyler","Airbnballsack","The host. Tall and strong.",["Airbnballsack","The Innkeeper of Pain","Host With the Most (Ass)","Big Tall Landlord","Tyler Thick-Thighs","Check-Out Time Tyler"]],
+  ["reid","Reid","Bump, Set, Dump","Super tall. Volleyball guy.",["Bump, Set, Dump","The Human Ladder","Volleyballsack","Kitchen Skyscraper","Six-Foot Shart","Spike-a-Dick Reid"]],
+  ["lowell","Lowell","Low-T Lowell","Oldest guy. Can hang in any sport.",["Low-T Lowell","The AARP Assassin","Old Balls Lowell","Medicare Menace","Saggy But Swaggy","Grandpa Gainz"]],
+  ["robert","Robert","Silent But Deadly Bobby","Drives a Prius. Owns a trampoline park.",["Silent But Deadly Bobby","Bounce House Bobby","Captain Carbon Credit","The Hybrid Hemorrhoid","Trampoline Tramp","Bobby No-Emissions"]],
+  ["markus","Markus","Skidmarkus","Goofy. Talks smack.",["Skidmarkus","All Mouth, No Dink","Markus Trash-Talkus","Yapper McFlapper","Markus the Mouth-Breather","Check-Your-Ego Markus"]],
+  ["curt","Curt","Chain-Banger Curt","Ripped for his age. Disc golf guy.",["Chain-Banger Curt","Shirtless Curt","Silver Fox Abs","The Frisbee Fondler","Curt Six-Pack","Disc Jockey Itch"]],
+  ["sam","Sam","Swamp Ass Sam","",["Swamp Ass Sam"]],
+  ["jake","Jake","Jock Itch Jake","",["Jock Itch Jake"]],
 ];
 const HUES = ["#D9623A","#2A8C80","#7458D1","#C23D6B","#2B6BCB","#B07418","#3B9447","#86573F"];
 const NICK_POOL = ["Big Dill Energy","The Pickle Tickler","Captain Kitchen Violation","Sir Lobs-a-Lot","Butt Dink","Dill Doe","Mr. Net Job","Limp Paddle","Sweaty Betty","The Dinkfluencer","Shank Daddy","Gherkin Jerkin'","Cheeks McGee","Nacho Daddy","The Ball Fondler","Dad Bod Dinker","The Human Fault","Whiffle Dick","Kitchen Creeper","Banger Boy","Moist Towelette","Erectile Dinkfunction","Paddle Sniffer","Wet Lettuce Wrists","The Brown Note","The Shart Serve","Third-Shot Flop","Swamp Crotch","Sloppy Joe Dinks","Lord Farquad of the Kitchen","Pickled Sausage","The Dink Whisperer","Sir Chafes-a-Lot","Two-Bounce Tushie","Saggy Paddle"];
@@ -306,7 +308,7 @@ async function connect(){
 /* ---------- players ---------- */
 function roster(){
   const over = (S.roster && Array.isArray(S.roster.players)) ? S.roster.players : [];
-  return PLAYERS.map(([id,name,nick]) => { const o=over.find(x=>x.id===id); return {id,name,nick:(o&&o.nick)||nick}; });
+  return PLAYERS.map(([id,name,nick,bio,pool]) => { const o=over.find(x=>x.id===id); return {id,name,bio,pool,nick:(o&&o.nick)||nick}; });
 }
 function P(id){ return roster().find(p=>p.id===id) || {id,name:id,nick:id}; }
 function nm(id){ const p=P(id); return ui.crude ? p.nick : p.name; }
@@ -741,10 +743,10 @@ function renderCrew(){
   let h=`<div class="stack">
     <div class="card row between"><div><h2 style="font-size:18px">Crude nicknames</h2><p class="hint" style="margin:2px 0 0">Swap real names for the ones you deserve. Only changes your screen.</p></div>
       <button class="switch" role="switch" aria-checked="${!!ui.crude}" data-act="crude" aria-label="Crude nicknames"><span class="track"></span></button></div>
-    <div class="card"><h2 style="font-size:20px;margin-bottom:4px">The crew</h2><p class="hint" style="margin:0 0 6px">Edit a nickname or roll the dice for a new one.</p><div class="list">`;
+    <div class="card"><h2 style="font-size:20px;margin-bottom:4px">The crew</h2><p class="hint" style="margin:0 0 6px">Edit a nickname or roll the dice. The dice favor nicknames made for each guy.</p><div class="list">`;
   roster().forEach(p=>{
     const s=st.P[p.id];
-    h+=`<div class="crew">${av(p.id,"lg")}<div style="min-width:0"><div class="nmline">${esc(p.name)} · ${s.w}–${s.l} · ${s.elo}</div><input class="text" id="nick-${p.id}" data-nick="${p.id}" value="${esc(p.nick)}" maxlength="32" autocomplete="off" aria-label="Nickname for ${esc(p.name)}"></div>
+    h+=`<div class="crew">${av(p.id,"lg")}<div style="min-width:0"><div class="nmline">${esc(p.name)} · ${s.w}–${s.l} · ${s.elo}${p.bio?`<span class="bio">${esc(p.bio)}</span>`:""}</div><input class="text" id="nick-${p.id}" data-nick="${p.id}" value="${esc(p.nick)}" maxlength="32" autocomplete="off" aria-label="Nickname for ${esc(p.name)}"></div>
       <button class="iconbtn" data-act="reroll" data-v="${p.id}" aria-label="New random nickname for ${esc(p.name)}">${ICONS.dice}</button></div>`;
   });
   h+=`</div></div>
@@ -845,7 +847,7 @@ document.addEventListener("click", e=>{
     case "duos": ui.duosAll=!ui.duosAll; render(); break;
     case "copy": copyText(standingsText()); break;
     case "backup": copyText(JSON.stringify({roster:S.roster,sessions:S.sessions,games:S.games})); break;
-    case "reroll": { const cur=P(v).nick; const used=roster().map(p=>p.nick); const opts=NICK_POOL.filter(n=>n!==cur&&!used.includes(n)); const n=pick(opts.length?opts:NICK_POOL); setNick(v,n); if(!ui.crude) toast(`${P(v).name} is now "${n}"`); break; }
+    case "reroll": { const cur=P(v).nick; const used=roster().map(p=>p.nick); const mine=(P(v).pool||[]).filter(n=>n!==cur); const gen=NICK_POOL.filter(n=>n!==cur&&!used.includes(n)); const n=(mine.length&&Math.random()<0.75)?pick(mine):pick(gen.length?gen:NICK_POOL); setNick(v,n); if(!ui.crude) toast(`${P(v).name} is now "${n}"`); break; }
   }
 });
 document.addEventListener("input", e=>{ if(e.target.id==="f-name" && ui.form) ui.form.name=e.target.value; });
