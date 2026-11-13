@@ -86,11 +86,7 @@ main{padding-block:16px calc(28px + env(safe-area-inset-bottom,0px))}
 
 .actions{display:flex;gap:10px;flex-wrap:wrap}
 .btn.go{background:var(--ball);color:var(--ball-ink)}
-.share{background:var(--surface);border-radius:20px;box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column;gap:8px;font-size:14px}
-.share span{color:var(--muted)}
-.join{display:flex;gap:8px}
-.join .btn{flex:none}
-.joinin{flex:1;min-width:0;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);font-size:16px}
+
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:12px;font-weight:600;font-size:14px;background:var(--surface-2);min-height:42px;flex:1}
 .btn.danger{color:var(--loss)}
 .btn.danger.armed{background:var(--loss);color:#fff}
@@ -178,118 +174,64 @@ async function connect(){
   db.doc("config/pot").onSnapshot(snap=>{ S.buyIn=snap.exists?(+snap.data().buyIn||0):0; ok("c",snap); render(); }, fail);
 }
 
-/* ---------- shared board on JSONBlob (used when not running as a Claude artifact) ----------
-   JSONBlob has no locking, so two phones saving at once can overwrite each other. To never lose a tap,
-   each phone owns one entry: its own running tally. The board total is the sum of every phone's tally.
-   Each phone keeps its tally on the device too, and rewrites its entry whenever the server copy is
-   missing or stale, so an overwritten entry heals within a few seconds.
-   doc = { epoch, dev: { <phoneId>: { e:epoch, p:{player:delta}, b:buyIn, bt:time } } } */
-const BLOB_API="https://jsonblob.com/api/jsonBlob";
-const DEV_ID = LS.get("pickles:dev",null) || (()=>{ const v=Math.random().toString(36).slice(2,12); LS.set("pickles:dev",v); return v; })();
-const blob={ id:null, doc:{epoch:0,dev:{}}, mine:null, resetPending:false, flushing:false, t:null, poll:null };
-const mineKey=()=>"pickles:mine:"+blob.id;
-function saveMine(){ LS.set(mineKey(),blob.mine); }
-function totals(doc,mine){
-  const dev={...(doc.dev||{})};
-  if(mine && mine.e>=(doc.epoch||0)) dev[DEV_ID]=mine;
-  const out={}; IDS.forEach(id=>out[id]=0); let b=0, bt=-1;
-  Object.values(dev).forEach(d=>{
-    if(!d || d.e!==Math.max(doc.epoch||0, mine?mine.e:0)) return;
-    Object.entries(d.p||{}).forEach(([id,n])=>{ if(id in out) out[id]+=+n||0; });
-    if((d.bt||0)>bt && d.b!==undefined){ bt=d.bt||0; b=+d.b||0; }
-  });
-  IDS.forEach(id=>{ out[id]=Math.max(0,out[id]); });
-  return {pts:out,buyIn:b};
+/* ---------- shared scores on Firebase Realtime Database (used when not running as a Claude artifact) ----------
+   Uses the REST API only, so there is no SDK to load. Taps are sent as server-side increments,
+   so two phones tapping at the same moment never overwrite each other.
+   Data: /pickles/pts/<player> = number, /pickles/buyIn = number. */
+const FIREBASE_URL = "";   // e.g. "https://pickles-1234-default-rtdb.firebaseio.com"
+const FB = FIREBASE_URL.replace(/\/+$/,"") + "/pickles";
+const fb = { tree:{pts:{},buyIn:0}, pend:{}, es:null, poll:null, sending:false };
+function fbShow(){
+  const out={}; IDS.forEach(id=>{ out[id]=Math.max(0,(+((fb.tree.pts||{})[id])||0)+(fb.pend[id]||0)); });
+  S.pts=out; S.buyIn=+fb.tree.buyIn||0;
 }
-function showBlob(){ const v=totals(blob.doc,blob.mine); S.pts=v.pts; S.buyIn=v.buyIn; }
-const same=(x,y)=>JSON.stringify(x)===JSON.stringify(y);
-async function blobGet(){
-  const r=await fetch(`${BLOB_API}/${blob.id}`,{headers:{Accept:"application/json"},cache:"no-store"});
-  if(r.status===404) throw Object.assign(new Error("gone"),{gone:true});
-  if(!r.ok) throw new Error("get "+r.status);
-  const j=await r.json();
-  if(!j || typeof j!=="object") return {epoch:0,dev:{}};
-  if(!j.dev){ // board created before this format: fold its numbers into a starter entry
-    const p={}; IDS.forEach(id=>{ const n=+((j.pts||{})[id])||0; if(n) p[id]=n; });
-    return {epoch:0,dev:{seed:{e:0,p,b:+j.buyIn||0,bt:0}}};
+function fbApply(path,data,merge){
+  const parts=path.split("/").filter(Boolean);
+  if(!parts.length){ fb.tree = merge ? {...fb.tree,...(data||{})} : (data||{}); }
+  else {
+    let node=fb.tree; for(let i=0;i<parts.length-1;i++){ if(typeof node[parts[i]]!=="object"||node[parts[i]]===null) node[parts[i]]={}; node=node[parts[i]]; }
+    const k=parts[parts.length-1];
+    if(merge){ node[k]={...(node[k]||{}),...(data||{})}; } else if(data===null) delete node[k]; else node[k]=data;
   }
-  return j;
+  if(!fb.tree.pts) fb.tree.pts={};
 }
-function adopt(doc){
-  blob.doc=doc;
-  if((doc.epoch||0)>blob.mine.e){ blob.mine={e:doc.epoch,p:{},b:blob.mine.b,bt:0}; saveMine(); } // someone reset the board
+async function fbGet(){
+  try{ const r=await fetch(FB+".json",{cache:"no-store"}); if(!r.ok) throw new Error(r.status); fb.tree=(await r.json())||{pts:{},buyIn:0}; if(!fb.tree.pts) fb.tree.pts={}; S.status="live"; }
+  catch{ S.status="offline"; }
+  fbShow(); render();
 }
-function needsWrite(){
-  if(blob.resetPending) return true;
-  if(blob.mine.e>(blob.doc.epoch||0)) return true;          // our reset got overwritten
-  const hasMine=Object.keys(blob.mine.p).length||blob.mine.bt;
-  return !!hasMine && !same((blob.doc.dev||{})[DEV_ID],blob.mine);
+function fbListen(){
+  if(!("EventSource" in window)){ fb.poll=setInterval(fbGet,4000); fbGet(); return; }
+  try{ fb.es?.close(); }catch{}
+  const es=new EventSource(FB+".json"); fb.es=es;
+  const on=(merge)=>ev=>{ try{ const m=JSON.parse(ev.data); fbApply(m.path,m.data,merge); S.status="live"; fbShow(); render(); }catch{} };
+  es.addEventListener("put",on(false)); es.addEventListener("patch",on(true));
+  es.addEventListener("cancel",()=>{ S.status="offline"; render(); });
+  es.onerror=()=>{ if(S.status==="live"){ S.status="syncing"; render(); } };      // EventSource reconnects by itself
+  clearInterval(fb.poll); fb.poll=setInterval(()=>{ if(S.status!=="live") fbGet(); },8000);
 }
-async function blobPoll(){
-  if(!blob.id || blob.flushing || document.visibilityState==="hidden") return;
-  try{ adopt(await blobGet()); if(needsWrite()){ S.status="syncing"; blobQueue(); } else S.status="live"; }
-  catch(e){ S.status = e.gone ? "gone" : "offline"; }
-  showBlob(); render();
-}
-function blobQueue(){ clearTimeout(blob.t); blob.t=setTimeout(blobFlush,450); }
-async function blobFlush(){
-  if(blob.flushing) return;
-  blob.flushing=true;
+async function fbSend(){
+  if(fb.sending) return; const batch={...fb.pend}; if(!Object.keys(batch).length) return;
+  fb.sending=true;
+  const body={}; Object.entries(batch).forEach(([id,d])=>{ if(d) body[id]={".sv":{increment:d}}; });
   try{
-    let doc=await blobGet(); adopt(doc);
-    if(blob.resetPending || blob.mine.e>(doc.epoch||0)){
-      const e=Math.max(doc.epoch||0, blob.mine.e) + (blob.resetPending?1:0);
-      blob.mine={e,p:{},b:blob.mine.b,bt:blob.mine.bt}; saveMine();
-      doc={epoch:e,dev:{}}; blob.resetPending=false;
-    }
-    const next={epoch:doc.epoch||0, dev:{...(doc.dev||{}),[DEV_ID]:clone(blob.mine)}, updated:Date.now()};
-    const r=await fetch(`${BLOB_API}/${blob.id}`,{method:"PUT",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(next)});
-    if(!r.ok) throw new Error("put "+r.status);
-    blob.doc=next; S.status="live";
-  }catch(e){ S.status = e.gone ? "gone" : "offline"; setTimeout(blobQueue,3000); }
-  blob.flushing=false; showBlob(); render();
+    const r=await fetch(FB+"/pts.json",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok) throw new Error(r.status);
+    const got=await r.json(); Object.entries(batch).forEach(([id,d])=>{ fb.pend[id]=(fb.pend[id]||0)-d; if(!fb.pend[id]) delete fb.pend[id]; if(got&&id in got){ fb.tree.pts[id]=got[id]; } });
+    S.status="live";
+  }catch{ S.status="offline"; setTimeout(fbQueue,3000); }
+  fb.sending=false; fbShow(); render(); if(Object.keys(fb.pend).length) fbQueue();
 }
-const clone=o=>JSON.parse(JSON.stringify(o));
-function blobTap(id,d){ blob.mine.p[id]=(blob.mine.p[id]||0)+d; if(!blob.mine.p[id]) delete blob.mine.p[id]; saveMine(); showBlob(); blobQueue(); }
-function blobBuyIn(v){ blob.mine.b=v; blob.mine.bt=Date.now(); saveMine(); showBlob(); blobQueue(); }
-function blobReset(){ blob.resetPending=true; blob.mine={e:blob.mine.e,p:{},b:blob.mine.b,bt:blob.mine.bt}; blob.doc={epoch:blob.doc.epoch,dev:{}}; saveMine(); showBlob(); blobQueue(); }
-function idFromHash(){ const m=location.hash.match(/^#([A-Za-z0-9_-]{6,80})$/); return m?m[1]:null; }
-function startBlob(id, seed){
-  blob.id=id; S.mode="blob"; S.status="syncing";
-  blob.mine = seed || LS.get(mineKey(),null) || {e:0,p:{},b:0,bt:0};
-  saveMine(); blob.doc={epoch:blob.mine.e,dev:{}};
-  LS.set("pickles:blob",id);
-  if(location.hash!=="#"+id) history.replaceState(null,"","#"+id);
-  showBlob(); render(); blobPoll();
-  clearInterval(blob.poll); blob.poll=setInterval(blobPoll,4000);
+function fbQueue(){ clearTimeout(fbQueue.t); fbQueue.t=setTimeout(fbSend,250); }
+function fbTap(id,d){ fb.pend[id]=(fb.pend[id]||0)+d; fbShow(); fbQueue(); }
+async function fbPut(path,val){
+  try{ const r=await fetch(FB+path+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(val)}); if(!r.ok) throw new Error(r.status); }
+  catch{ toast("Couldn't save that. Check your connection and try again."); fbGet(); }
 }
-async function createBoard(){
-  if(ui.creating) return; ui.creating=true; render();
-  try{
-    const p={}; IDS.forEach(id=>{ if(S.pts[id]) p[id]=S.pts[id]; });
-    const mine={e:0,p,b:S.buyIn||0,bt:S.buyIn?Date.now():0};
-    const data={epoch:0,dev:{[DEV_ID]:mine},updated:Date.now()};
-    const r=await fetch(BLOB_API,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify(data)});
-    if(!r.ok) throw new Error("post "+r.status);
-    const loc=r.headers.get("Location")||r.headers.get("X-Jsonblob-Id")||r.headers.get("X-jsonblob")||"";
-    const id=(loc.match(/([A-Za-z0-9_-]{6,80})\/?$/)||[])[1];
-    if(!id) throw new Error("no id");
-    startBlob(id, mine); blob.doc=data; showBlob(); render();
-    toast("Shared scoreboard created. Now copy the link and send it to the group.");
-  }catch(e){ ui.createFailed=true; toast("Couldn't create it automatically. Try the manual steps instead."); }
-  ui.creating=false; render();
-}
-function joinBoard(v){
-  const id=((v||"").trim().match(/([A-Za-z0-9_-]{6,80})\/?$/)||[])[1];
-  if(!id){ toast("That doesn't look like a board link or ID."); return; }
-  startBlob(id);
-}
-async function shareLink(){
-  const url=location.href;
-  try{ await navigator.clipboard.writeText(url); toast("Link copied. Send it to the group."); }catch{ ui.copy=url; renderSheet(); }
-}
-window.addEventListener("hashchange",()=>{ const id=idFromHash(); if(id&&id!==blob.id) startBlob(id); });
-document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") blobPoll(); });
+function fbBuyIn(v){ fb.tree.buyIn=v; fbShow(); fbPut("/buyIn",v); }
+function fbReset(){ fb.pend={}; fb.tree.pts={}; fbShow(); fbPut("/pts",{}); }
+function startFirebase(){ S.mode="fb"; S.status="syncing"; fbShow(); render(); fbGet(); fbListen(); }
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && S.mode==="fb") fbGet(); });
 
 function nm(id){ const p=PLAYERS.find(x=>x[0]===id); return ui.crude?p[2]:p[1]; }
 function pts(id){ return S.pts[id]||0; }
@@ -304,25 +246,25 @@ function change(id,d){
   const n=Math.max(0,pts(id)+d); if(n===pts(id)) return;
   holdOrder();
   ui.bumped=id;
-  if(S.mode==="blob"){ blobTap(id,n-pts(id)); render(); }
+  if(S.mode==="fb"){ fbTap(id,n-pts(id)); render(); }
   else { S.pts={...S.pts,[id]:n}; write("points/"+id,{pts:n}); render(); }
   if(navigator.vibrate) try{ navigator.vibrate(10); }catch{}
 }
 function setBuyIn(v){
   if(S.readOnly) return;
   const b=Math.max(0,Math.min(10000,Math.round(+v||0)));
-  if(S.mode==="blob"){ blobBuyIn(b); render(); return; }
+  if(S.mode==="fb"){ fbBuyIn(b); render(); return; }
   S.buyIn=b; write("config/pot",{buyIn:S.buyIn}); render();
 }
 function resetAll(){
   if(S.readOnly) return;
-  if(S.mode==="blob") blobReset();
+  if(S.mode==="fb") fbReset();
   else IDS.forEach(id=>{ if(pts(id)){ S.pts={...S.pts,[id]:0}; write("points/"+id,{pts:0}); } });
   ui.order=null; render(); toast("Everyone's back to zero.");
 }
 
 function render(){
-  const st={local:["On this device",""],connecting:["Connecting",""],syncing:["Syncing",""],live:["Live","live"],slow:["Can't reach sync","warn"],offline:["Offline · retrying","warn"],gone:["Board not found","warn"]}[S.status];
+  const st={local:["On this device",""],connecting:["Connecting",""],syncing:["Syncing",""],live:["Live","live"],slow:["Can't reach sync","warn"],offline:["Offline · retrying","warn"]}[S.status];
   $("#status").innerHTML=`<span class="pill ${S.readOnly?"warn":st[1]}"><i></i>${S.readOnly?"View only":st[0]}</span>`;
   $("#crude").setAttribute("aria-checked",String(!!ui.crude));
 
@@ -335,17 +277,10 @@ function render(){
     : leaders.length>1 ? `Tied at ${top}: <b>${leaders.map(id=>esc(nm(id))).join(", ")}</b>`
     : `<b>${esc(nm(rank[0]))}</b> leads with ${top}${second!==undefined?`, ${top-pts(second)} ahead`:""}`;
 
-  const ae=document.activeElement; const editingBuy = ae && (ae.id==="buyin"||ae.id==="joinid");
+  const ae=document.activeElement; const editingBuy = ae && ae.id==="buyin";
   let h="";
   if(S.readOnly) h+=`<div class="banner">You're viewing a shared leaderboard. Ask the organizer for Contributor access to change points.</div>`;
-  if(S.mode==="local" && !inArtifact){
-    h+=`<div class="share"><b>Scores are only on this phone right now.</b>
-      <span>Make a shared scoreboard and everyone with the link sees the same points.</span>
-      <button class="btn go" data-act="create" ${ui.creating?"disabled":""}>${ui.creating?"Creating…":"Create shared scoreboard"}</button>
-      ${ui.createFailed?`<span>Or do it by hand: open <b>jsonblob.com</b>, tap <b>Save</b>, copy the ID at the end of the address bar, and paste it here.</span>`:`<span>Already have a link from the group? Just open it. Or paste the ID:</span>`}
-      <div class="join"><input id="joinid" class="joinin" placeholder="Board ID" autocomplete="off" autocapitalize="off"><button class="btn" data-act="join">Join</button></div></div>`;
-  }
-  if(S.mode==="blob" && S.status==="gone") h+=`<div class="banner">This board doesn't exist anymore. JSONBlob may have deleted it. Clear the part after # in the address bar to start a new one.</div>`;
+  if(S.mode==="local" && !inArtifact) h+=`<div class="banner">Not connected to the shared scoreboard yet. Points are only saved on this phone.</div>`;
   h+=`<div class="pot">${CROWN}<span class="eyebrow">The pot</span><span class="amt">${pot?"$"+pot:"$—"}</span><span class="lead">${lead}</span>
     <label class="buyin" for="buyin">Buy-in $<input id="buyin" type="number" inputmode="numeric" min="0" placeholder="0" value="${S.buyIn||""}" ${S.readOnly?"disabled":""}> each</label></div>`;
   h+=`<div class="board">${order.map(id=>{
@@ -356,9 +291,9 @@ function render(){
         <span class="pts ${ui.bumped===id?"bump":""}" aria-label="${p} points">${p}</span>
         <button class="plus" data-id="${id}" data-d="1" aria-label="Give ${esc(nm(id))} a point" ${S.readOnly?"disabled":""}>+</button></div></div>`;
     }).join("")}</div>`;
-  h+=`<div class="actions">${S.mode==="blob"?`<button class="btn go" data-act="share">Copy link for the group</button>`:""}<button class="btn" data-act="copy">Copy standings</button>
+  h+=`<div class="actions"><button class="btn" data-act="copy">Copy standings</button>
     <button class="btn danger ${ui.confirm?"armed":""}" data-act="reset" ${S.readOnly?"disabled":""}>${ui.confirm?"Really reset to 0?":"Reset all"}</button></div>
-    <p class="hint">${S.mode==="remote"?"Points sync live to everyone with this page open.":S.mode==="blob"?"Everyone with this link sees the same points. Other phones refresh every few seconds.":"Points are saved on this device."} One point per King's Court win. Most points at the end takes the pot.</p>`;
+    <p class="hint">${S.mode==="remote"?"Points sync live to everyone with this page open.":S.mode==="fb"?"Everyone on this site sees the same points, live.":"Points are saved on this device."} One point per King's Court win. Most points at the end takes the pot.</p>`;
 
   if(editingBuy){ // don't rebuild the input mid-typing
     const board=$("#main .board"); if(board){ const tmp=document.createElement("div"); tmp.innerHTML=h; board.replaceWith(tmp.querySelector(".board")); const l=$("#main .lead"); if(l) l.innerHTML=lead; }
@@ -386,20 +321,16 @@ document.addEventListener("click", async e=>{
   const el=e.target.closest("[data-act]"); if(!el) return;
   const a=el.dataset.act;
   if(a==="close"){ if(e.target.closest("[data-stop]") && !e.target.closest('button[data-act="close"]')) return; ui.copy=null; renderSheet(); }
-  if(a==="create"){ createBoard(); return; }
-  if(a==="join"){ joinBoard(($("#joinid")||{}).value); return; }
-  if(a==="share"){ shareLink(); return; }
   if(a==="copy"){ const t=standingsText(); try{ await navigator.clipboard.writeText(t); toast("Copied. Paste it in the group chat."); }catch{ ui.copy=t; renderSheet(); } }
   if(a==="reset"){ if(ui.confirm){ ui.confirm=false; resetAll(); } else { ui.confirm=true; render(); setTimeout(()=>{ if(ui.confirm){ ui.confirm=false; render(); } },3500); } }
 });
 document.addEventListener("change", e=>{ if(e.target.id==="buyin") setBuyIn(e.target.value); });
-document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="joinid") joinBoard(e.target.value); if(e.key==="Enter" && e.target.id==="buyin") e.target.blur(); if(e.key==="Escape" && ui.copy){ ui.copy=null; renderSheet(); } });
+document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="buyin") e.target.blur(); if(e.key==="Escape" && ui.copy){ ui.copy=null; renderSheet(); } });
 document.addEventListener("focusout", e=>{ if(e.target.id==="buyin") setTimeout(render,0); });
 
 const inArtifact = !!(window.claude && typeof window.claude.use==="function");
 loadLocal();
-const startId = inArtifact ? null : (idFromHash() || LS.get("pickles:blob",null));
-if(startId) startBlob(startId); else render();
+if(!inArtifact && FIREBASE_URL) startFirebase(); else render();
 connect();
 })();
 </script>
