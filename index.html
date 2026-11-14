@@ -178,7 +178,7 @@ async function connect(){
    Uses the REST API only, so there is no SDK to load. Taps are sent as server-side increments,
    so two phones tapping at the same moment never overwrite each other.
    Data: /pickles/pts/<player> = number, /pickles/buyIn = number. */
-const FIREBASE_URL = "";   // e.g. "https://pickles-1234-default-rtdb.firebaseio.com"
+const FIREBASE_URL = "https://pickles-d0e25-default-rtdb.firebaseio.com";   // e.g. "https://pickles-1234-default-rtdb.firebaseio.com"
 const FB = FIREBASE_URL.replace(/\/+$/,"") + "/pickles";
 const fb = { tree:{pts:{},buyIn:0}, pend:{}, es:null, poll:null, sending:false };
 function fbShow(){

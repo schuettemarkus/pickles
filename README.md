@@ -13,7 +13,7 @@ Setup: create a Realtime Database in a free Firebase project and set these rules
 { "rules": { "pickles": { ".read": true, ".write": true } } }
 ```
 
-Then put the database URL in `FIREBASE_URL` in `index.html`. Anyone who opens the site can change points.
+The database URL is set in `FIREBASE_URL` in `index.html` (currently `https://pickles-d0e25-default-rtdb.firebaseio.com`). Anyone who opens the site can change points.
 
 ## Hosting
 GitHub Pages, deployed by `.github/workflows/pages.yml` on every push. In Settings → Pages, Source must be set to **GitHub Actions**.
